@@ -14,10 +14,17 @@ func GetOpt[V any](slice []V, index int) mo.Option[V] {
 }
 
 func ParseInt(s string) (int, bool) {
-	var n int
 	n, err := strconv.Atoi(s)
 	if err != nil {
 		return 0, false
 	}
 	return n, true
+}
+
+func ParseUint(s string) (uint, bool) {
+	n, err := strconv.ParseUint(s, 10, 32)
+	if err != nil {
+		return 0, false
+	}
+	return uint(n), true
 }
