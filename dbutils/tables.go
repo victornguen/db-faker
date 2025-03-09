@@ -3,10 +3,8 @@ package dbutils
 import (
 	"database/sql"
 	"fmt"
-	"github.com/go-faker/faker/v4"
-	"math/rand"
+	"github.com/victornguen/db-faker/datagen"
 	"strings"
-	"time"
 )
 
 const (
@@ -14,34 +12,6 @@ const (
 		SELECT table_name 
 		FROM information_schema.tables 
 		WHERE table_schema = 'public'
-	`
-
-	getColumnsQuery = `
-		SELECT 
-			c.column_name,
-			c.data_type,
-			COALESCE((
-				SELECT TRUE 
-				FROM information_schema.key_column_usage kcu
-				JOIN information_schema.referential_constraints rc
-					ON kcu.constraint_name = rc.constraint_name
-				WHERE kcu.table_name = c.table_name
-					AND kcu.column_name = c.column_name
-				LIMIT 1
-			), FALSE) AS is_foreign_key,
-			COALESCE((
-				SELECT kcu2.table_name
-				FROM information_schema.referential_constraints rc
-				JOIN information_schema.key_column_usage kcu
-					ON rc.constraint_name = kcu.constraint_name
-				JOIN information_schema.key_column_usage kcu2
-					ON rc.unique_constraint_name = kcu2.constraint_name
-				WHERE kcu.table_name = c.table_name
-					AND kcu.column_name = c.column_name
-				LIMIT 1
-			), '') AS ref_table
-		FROM information_schema.columns c
-		WHERE table_name = $1
 	`
 
 	getPrimaryKeyColumnsQuery = `
@@ -74,6 +44,28 @@ const (
 	`
 )
 
+func ApplyRulesToTables(tables *[]Table, rules datagen.TablesRules) error {
+	for i, table := range *tables {
+		if rule, ok := rules.Rules[table.Name]; ok {
+			table.RowNum = rule.RowNum
+			for colName, rule := range rule.Rules {
+				genFunc, err := datagen.RuleToGeneratorFunc(rule)
+				if err != nil {
+					return fmt.Errorf("error generating function for rule %s: %v", rule, err)
+				}
+				col := table.Columns[colName]
+				col.DataGen = genFunc
+				_, present := table.Columns[colName]
+				if present {
+					table.Columns[colName] = col
+				}
+			}
+			(*tables)[i] = table
+		}
+	}
+	return nil
+}
+
 func GetTablesWithDependencies(db *sql.DB) ([]Table, error) {
 	tables := make([]Table, 0)
 
@@ -97,9 +89,14 @@ func GetTablesWithDependencies(db *sql.DB) ([]Table, error) {
 		}
 
 		// Get columns
-		columns, err := getColumns(db, tableName)
+		columns, err := GetColumns(db, tableName)
 		if err != nil {
 			return nil, err
+		}
+
+		columnsMap := make(map[string]Column)
+		for _, col := range columns {
+			columnsMap[col.Name] = col
 		}
 
 		// Get dependencies
@@ -110,9 +107,11 @@ func GetTablesWithDependencies(db *sql.DB) ([]Table, error) {
 
 		tables = append(tables, Table{
 			Name:        tableName,
-			Columns:     columns,
+			Columns:     columnsMap,
 			DependsOn:   deps,
 			PrimaryKeys: pkCols,
+			RowNum:      0,
+			Rules:       make(map[string]func() string),
 		})
 	}
 
@@ -135,31 +134,6 @@ func getPrimaryKeyColumns(db *sql.DB, tableName string) (map[string]bool, error)
 		pkCols[colName] = true
 	}
 	return pkCols, nil
-}
-
-func getColumns(db *sql.DB, tableName string) ([]Column, error) {
-	rows, err := db.Query(getColumnsQuery, tableName)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	columns := make([]Column, 0)
-	for rows.Next() {
-		var col Column
-		var dataTypeStr string
-		if err := rows.Scan(&col.Name, &dataTypeStr, &col.IsForeignKey, &col.RefTable); err != nil {
-			return nil, err
-		}
-		dataType, err := StringToDataType(dataTypeStr)
-		if err != nil {
-			return nil, err
-		}
-		col.DataType = dataType
-		columns = append(columns, col)
-	}
-
-	return columns, nil
 }
 
 func getTableDependencies(db *sql.DB, tableName string) ([]string, error) {
@@ -216,11 +190,15 @@ func getPrimaryKeyColumn(db *sql.DB, tableName string) (string, error) {
 	return colName, nil
 }
 
-func GenerateAndInsertData(db *sql.DB, table Table, count int) error {
+func GenerateAndInsertData(db *sql.DB, table Table) error {
 
 	// Filter out primary key columns
 	var filteredColumns []Column
 	for _, col := range table.Columns {
+		switch col.DataType.(type) {
+		case Serial, BigSerial, SmallSerial, TsVector, TsQuery:
+			continue
+		}
 		if !table.PrimaryKeys[col.Name] {
 			filteredColumns = append(filteredColumns, col)
 		}
@@ -246,13 +224,12 @@ func GenerateAndInsertData(db *sql.DB, table Table, count int) error {
 	}
 	defer stmt.Close()
 
-	for i := 0; i < count; i++ {
+	for i := 0; i < table.RowNum; i++ {
 		values := make([]interface{}, len(filteredColumns))
 		for j, col := range filteredColumns {
 			if col.IsForeignKey && col.RefTable == "" {
 				return fmt.Errorf("no reference table for %s.%s", table.Name, col.Name)
-			}
-			if col.IsForeignKey {
+			} else if col.IsForeignKey {
 				pkCol, err := getPrimaryKeyColumn(db, col.RefTable)
 				if err != nil {
 					return fmt.Errorf("table %s foreign key error: %v", table.Name, err)
@@ -270,30 +247,7 @@ func GenerateAndInsertData(db *sql.DB, table Table, count int) error {
 				}
 				values[j] = refID
 			} else {
-				switch col.DataType.(type) {
-				case Int:
-					values[j] = rand.Intn(1000)
-				case Numeric:
-					values[j] = rand.Float64() * 1000
-				case VarChar:
-					if strings.Contains(col.Name, "email") {
-						values[j] = faker.Email()
-					} else if strings.Contains(col.Name, "username") {
-						values[j] = faker.Username()
-					} else {
-						values[j] = faker.Word()
-					}
-				case Text:
-					values[j] = faker.Sentence()
-				case Boolean:
-					values[j] = rand.Intn(2) == 1
-				case TimeStamp:
-					values[j] = time.Now().Add(time.Duration(rand.Intn(100000)) * time.Hour)
-				case Date:
-					values[j] = time.Now().AddDate(0, 0, rand.Intn(100))
-				default:
-					return fmt.Errorf("unsupported data type: %T", col.DataType)
-				}
+				values[j] = col.DataGen()
 			}
 		}
 
@@ -303,6 +257,6 @@ func GenerateAndInsertData(db *sql.DB, table Table, count int) error {
 		}
 	}
 
-	fmt.Printf("Inserted %d rows into %s\n", count, table.Name)
+	fmt.Printf("Inserted %d rows into %s\n", table.RowNum, table.Name)
 	return nil
 }

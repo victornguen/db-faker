@@ -1,27 +1,55 @@
 package dbutils
 
 import (
-	funcutil "db_faker/common"
 	"fmt"
+	"github.com/go-faker/faker/v4"
+	"github.com/go-faker/faker/v4/pkg/options"
 	"github.com/samber/mo"
+	funcutil "github.com/victornguen/db-faker/common"
+	"github.com/victornguen/db-faker/datagen"
+	"math/rand"
 	"regexp"
 	"strings"
 )
 
 type DataType interface {
+	DefaultGenerator() func() string
 }
 
 // BigInt - signed eight-byte integer
 // aliases:int8
 type BigInt struct{}
 
+func (b BigInt) DefaultGenerator() func() string {
+	fun, err := datagen.RuleToGeneratorFunc("int")
+	if err != nil {
+		panic(err)
+	}
+	return fun
+}
+
 // BigSerial - autoincrementing eight-byte integer
 // aliases:serial8
 type BigSerial struct{}
 
+func (b BigSerial) DefaultGenerator() func() string {
+	fun, err := datagen.RuleToGeneratorFunc("int")
+	if err != nil {
+		panic(err)
+	}
+	return fun
+}
+
 // Bit - fixed-length bit string
 type Bit struct {
 	Len mo.Option[int]
+}
+
+func (b Bit) DefaultGenerator() func() string {
+	val := rand.Intn(2)
+	return func() string {
+		return fmt.Sprintf("%d", val)
+	}
 }
 
 // VarBit - variable-length bit string
@@ -30,20 +58,65 @@ type VarBit struct {
 	Len mo.Option[int]
 }
 
+func (v VarBit) DefaultGenerator() func() string {
+	// generate random variable-length bit string
+	length, present := v.Len.Get()
+	if !present {
+		length = 8
+		return func() string {
+			return fmt.Sprintf("%08b", rand.Intn(256))
+		}
+	}
+	return func() string {
+		return fmt.Sprintf("%0*b", length, rand.Intn(1<<length))
+	}
+}
+
 // Boolean - logical Boolean (true/false)
 // aliases:bool
 type Boolean struct{}
 
+func (b Boolean) DefaultGenerator() func() string {
+	return func() string {
+		val := rand.Intn(2)
+		return fmt.Sprintf("%t", val == 1)
+	}
+}
+
 // Box - rectangular box on a plane
 type Box struct{}
 
+func (b Box) DefaultGenerator() func() string {
+	return func() string {
+		return fmt.Sprintf("(%d,%d),(%d,%d)", rand.Intn(100), rand.Intn(100), rand.Intn(100), rand.Intn(100))
+	}
+}
+
 // ByteA - binary data ("byte array")
 type ByteA struct{}
+
+func (b ByteA) DefaultGenerator() func() string {
+	return func() string {
+		return "\\x012345"
+	}
+}
 
 // Char - fixed-length character string
 // aliases:char, character
 type Char struct {
 	Len mo.Option[int]
+}
+
+func (c Char) DefaultGenerator() func() string {
+	length, present := c.Len.Get()
+	if !present || length < 1 {
+		length = 1
+	}
+	return func() string {
+		return faker.Word(
+			options.WithRandomStringLength(uint(length)),
+		)
+	}
 }
 
 // VarChar - variable-length character string
@@ -52,49 +125,158 @@ type VarChar struct {
 	MaxLen mo.Option[int]
 }
 
+func (v VarChar) DefaultGenerator() func() string {
+	maxLen, present := v.MaxLen.Get()
+	if !present || maxLen < 1 {
+		maxLen = 255
+	}
+	return func() string {
+		return faker.Sentence(
+			options.WithRandomStringLength(uint(maxLen)),
+		)
+	}
+}
+
 // Cidr - IPv4 or IPv6 network address
 type Cidr struct{}
+
+func (c Cidr) DefaultGenerator() func() string {
+	return func() string {
+		return faker.IPv4()
+	}
+}
 
 // Circle - circle on a plane
 type Circle struct{}
 
+func (c Circle) DefaultGenerator() func() string {
+	return func() string {
+		return fmt.Sprintf("<(%d,%d),%d>", rand.Intn(100), rand.Intn(100), rand.Intn(100))
+	}
+}
+
 // Date - calendar date (year, month, day)
 type Date struct{}
+
+func (d Date) DefaultGenerator() func() string {
+	return func() string {
+		return faker.Date()
+	}
+}
 
 // Float8 - double precision floating-point number (8 bytes)
 // aliases:float8, double precision
 type Float8 struct{}
 
+func (f Float8) DefaultGenerator() func() string {
+	return func() string {
+		return fmt.Sprintf("%f", rand.Float64())
+	}
+}
+
 // Inet - IPv4 or IPv6 host address
 type Inet struct{}
+
+func (i Inet) DefaultGenerator() func() string {
+	return func() string {
+		return faker.IPv4()
+	}
+}
 
 // Int - signed four-byte integer
 // aliases:integer, int, int4
 type Int struct{}
 
+func (i Int) DefaultGenerator() func() string {
+	return func() string {
+		return fmt.Sprintf("%d", rand.Intn(1000))
+	}
+}
+
 // Interval - time span
 type Interval struct{}
+
+func (i Interval) DefaultGenerator() func() string {
+	return func() string {
+		intervals := []string{
+			"1 year 3 hours 20 minutes",
+			"2 weeks ago",
+			"5 days 4 hours",
+			"3 months 2 days",
+			"1 year 3 hours 20 minutes",
+			"5 minutes",
+			"1 hour",
+			"1 day",
+			"1 week",
+			"1 month",
+			"4 weeks",
+		}
+		return intervals[rand.Intn(len(intervals))]
+	}
+}
 
 // JSON - textual JSON data
 type JSON struct{}
 
+func (j JSON) DefaultGenerator() func() string {
+	return func() string {
+		return `{"key": "value"}`
+	}
+}
+
 // JsonB - binary JSON data, decomposed
 type JsonB struct{}
+
+func (j JsonB) DefaultGenerator() func() string {
+	return func() string {
+		return `{"key": "value"}`
+	}
+}
 
 // Line - infinite line on a plane
 type Line struct{}
 
+func (l Line) DefaultGenerator() func() string {
+	return func() string {
+		return fmt.Sprintf("{%d,%d,%d,%d}", rand.Intn(100), rand.Intn(100), rand.Intn(100), rand.Intn(100))
+	}
+}
+
 // LSeg - line segment on a plane
 type LSeg struct{}
+
+func (l LSeg) DefaultGenerator() func() string {
+	return func() string {
+		return fmt.Sprintf("[(%d,%d),(%d,%d)]", rand.Intn(100), rand.Intn(100), rand.Intn(100), rand.Intn(100))
+	}
+}
 
 // MacAddr - MAC (Media Access Control) address
 type MacAddr struct{}
 
+func (m MacAddr) DefaultGenerator() func() string {
+	return func() string {
+		return faker.MacAddress()
+	}
+}
+
 // MacAddr8 - MAC (Media Access Control) address (EUI-64 format)
 type MacAddr8 struct{}
 
+func (m MacAddr8) DefaultGenerator() func() string {
+	return func() string {
+		return faker.MacAddress()
+	}
+}
+
 // Money - currency amount
 type Money struct{}
+
+func (m Money) DefaultGenerator() func() string {
+	return func() string {
+		return fmt.Sprintf("%f", rand.Float64()*1000)
+	}
+}
 
 // Numeric - exact numeric of selectable precision
 // aliases:decimal, numeric
@@ -103,44 +285,116 @@ type Numeric struct {
 	Scale     mo.Option[int]
 }
 
+func (n Numeric) DefaultGenerator() func() string {
+	return func() string {
+		return fmt.Sprintf("%f", rand.Float64()*1000)
+	}
+}
+
 // Path - geometric path on a plane
 type Path struct{}
+
+func (p Path) DefaultGenerator() func() string {
+	return func() string {
+		return fmt.Sprintf("((%d,%d),(%d,%d))", rand.Intn(100), rand.Intn(100), rand.Intn(100), rand.Intn(100))
+	}
+}
 
 // PgLsn - PostgreSQL Log Sequence Number
 type PgLsn struct{}
 
+func (p PgLsn) DefaultGenerator() func() string {
+	return func() string {
+		return fmt.Sprintf("%d", rand.Intn(100))
+	}
+}
+
 // PgSnapshot - user-level transaction ID snapshot
 type PgSnapshot struct{}
+
+func (p PgSnapshot) DefaultGenerator() func() string {
+	return func() string {
+		return fmt.Sprintf("%d", rand.Intn(100))
+	}
+}
 
 // Point - geometric point on a plane
 type Point struct{}
 
+func (p Point) DefaultGenerator() func() string {
+	return func() string {
+		return fmt.Sprintf("(%d,%d)", rand.Intn(100), rand.Intn(100))
+	}
+}
+
 // Polygon - closed geometric path on a plane
 type Polygon struct{}
+
+func (p Polygon) DefaultGenerator() func() string {
+	return func() string {
+		return fmt.Sprintf("((%d,%d),(%d,%d),(%d,%d))", rand.Intn(100), rand.Intn(100), rand.Intn(100), rand.Intn(100), rand.Intn(100), rand.Intn(100))
+	}
+}
 
 // Real - single precision floating-point number (4 bytes)
 // aliases: float4, real
 type Real struct{}
 
+func (r Real) DefaultGenerator() func() string {
+	return func() string {
+		return fmt.Sprintf("%f", rand.Float32())
+	}
+}
+
 // SmallInt - signed two-byte integer
 // aliases: int2, smallint
 type SmallInt struct{}
+
+func (s SmallInt) DefaultGenerator() func() string {
+	return func() string {
+		return fmt.Sprintf("%d", rand.Intn(100))
+	}
+}
 
 // SmallSerial - autoincrementing two-byte integer
 // aliases: smallserial, serial2
 type SmallSerial struct{}
 
+func (s SmallSerial) DefaultGenerator() func() string {
+	return func() string {
+		return fmt.Sprintf("%d", rand.Intn(100))
+	}
+}
+
 // Serial - autoincrementing four-byte integer
 // aliases: serial, serial4
 type Serial struct{}
+
+func (s Serial) DefaultGenerator() func() string {
+	return func() string {
+		return fmt.Sprintf("%d", rand.Intn(100))
+	}
+}
 
 // Text - variable-length character string
 // aliases: text
 type Text struct{}
 
+func (t Text) DefaultGenerator() func() string {
+	return func() string {
+		return faker.Sentence()
+	}
+}
+
 type Time struct {
 	WithTimeZone bool
 	Precision    mo.Option[int]
+}
+
+func (t Time) DefaultGenerator() func() string {
+	return func() string {
+		return faker.TimeString()
+	}
 }
 
 // TimeStamp - date and time (no time zone)
@@ -150,11 +404,29 @@ type TimeStamp struct {
 	Precision    mo.Option[int]
 }
 
+func (t TimeStamp) DefaultGenerator() func() string {
+	return func() string {
+		return faker.Timestamp()
+	}
+}
+
 // TsQuery - text search query
 type TsQuery struct{}
 
+func (t TsQuery) DefaultGenerator() func() string {
+	return func() string {
+		return ""
+	}
+}
+
 // TsVector - text search document
 type TsVector struct{}
+
+func (t TsVector) DefaultGenerator() func() string {
+	return func() string {
+		return ""
+	}
+}
 
 // TxIDSnapshot - user-level transaction ID snapshot
 type TxIDSnapshot struct{}
@@ -162,8 +434,20 @@ type TxIDSnapshot struct{}
 // UUID - universally unique identifier
 type UUID struct{}
 
+func (u UUID) DefaultGenerator() func() string {
+	return func() string {
+		return faker.UUIDHyphenated()
+	}
+}
+
 // XML - XML data
 type XML struct{}
+
+func (x XML) DefaultGenerator() func() string {
+	return func() string {
+		return "<xml></xml>"
+	}
+}
 
 func StringToDataType(s string) (DataType, error) {
 	normalizedType := NormalizeType(s)
@@ -295,8 +579,9 @@ func createDataType(typeName string, n, m mo.Option[int], additive mo.Option[str
 		return TsQuery{}, nil
 	case "tsvector":
 		return TsVector{}, nil
-	case "txid_snapshot":
-		return TxIDSnapshot{}, nil
+	// shoud not be column type
+	//case "txid_snapshot":
+	//	return TxIDSnapshot{}, nil
 	case "uuid":
 		return UUID{}, nil
 	case "xml":

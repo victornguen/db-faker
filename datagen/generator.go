@@ -1,14 +1,15 @@
 package datagen
 
 import (
-	funcutil "db_faker/common"
 	"fmt"
 	"github.com/go-faker/faker/v4"
 	"github.com/go-faker/faker/v4/pkg/options"
+	funcutil "github.com/victornguen/db-faker/common"
 	"math/rand"
 	"os"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -17,15 +18,21 @@ type DataGenerator[T any] struct {
 }
 
 func RuleToGeneratorFunc(rule string) (func() string, error) {
-	var pattern = regexp.MustCompile(`([a-zA-Z]+)\s*(\((\d+)(,\s*(\d+))?\))?\s*`)
+	var customRuleFunc, err = customGenerator(rule)
+	if err == nil {
+		return customRuleFunc, nil
+	}
+	var regex = `([a-zA-Z]+)\s*(\((\d+)(,\s*(\d+))?\))?\s*`
+	var pattern = regexp.MustCompile(regex)
 	if rule == "" {
 		return nil, fmt.Errorf("empty rule")
 	}
 	rule = strings.ToLower(rule)
 	var matches = pattern.FindStringSubmatch(rule)
 	if len(matches) < 5 {
-		return nil, fmt.Errorf("0 matches found")
+		return nil, fmt.Errorf("invalid rule, rule must match pattern: %s", regex)
 	}
+	_ = matches[5]
 	var typeName = matches[1]
 	var nStr = matches[3]
 	var mStr = matches[5]
@@ -40,19 +47,19 @@ func RuleToGeneratorFunc(rule string) (func() string, error) {
 	case "sentence", "text":
 		generator, _ = sentenceGenerator(nStr)
 	case "firstname", "name":
-		generator = gen(faker.FirstName)
+		generator = genF(faker.FirstName)
 	case "lastname":
-		generator = gen(faker.LastName)
+		generator = genF(faker.LastName)
 	case "email":
-		generator = gen(faker.Email)
+		generator = genF(faker.Email)
 	case "username":
-		generator = gen(faker.Username)
+		generator = genF(faker.Username)
 	case "currency":
-		generator = gen(faker.Currency)
+		generator = genF(faker.Currency)
 	case "ccnumber":
-		generator = gen(faker.CCNumber)
+		generator = genF(faker.CCNumber)
 	case "cctype":
-		generator = gen(faker.CCType)
+		generator = genF(faker.CCType)
 	case "country":
 		generator = genMap(faker.GetCountryInfo, func(info faker.CountryInfo) string {
 			return info.Name
@@ -82,19 +89,19 @@ func RuleToGeneratorFunc(rule string) (func() string, error) {
 			return fmt.Sprintf("%f", info.Coordinates.Longitude)
 		})
 	case "phone":
-		generator = gen(faker.Phonenumber)
+		generator = genF(faker.Phonenumber)
 	case "date":
-		generator = gen(faker.Date)
+		generator = genF(faker.Date)
 	case "dayofweek":
-		generator = gen(faker.DayOfWeek)
+		generator = genF(faker.DayOfWeek)
 	case "month":
-		generator = gen(faker.MonthName)
+		generator = genF(faker.MonthName)
 	case "year":
-		generator = gen(faker.YearString)
+		generator = genF(faker.YearString)
 	case "time":
-		generator = gen(faker.TimeString)
+		generator = genF(faker.TimeString)
 	case "datetime", "timestamp":
-		generator = gen(faker.Timestamp)
+		generator = genF(faker.Timestamp)
 	case "bloodtype":
 		generator = genMap(faker.GetBlood, func(b faker.Blooder) string {
 			bt, _ := b.BloodType(reflect.Value{})
@@ -111,22 +118,80 @@ func RuleToGeneratorFunc(rule string) (func() string, error) {
 			return bg.(string)
 		})
 	case "paragraph":
-		generator = gen(faker.Paragraph)
+		generator = genF(faker.Paragraph)
 	case "ipv4":
-		generator = gen(faker.IPv4)
+		generator = genF(faker.IPv4)
 	case "ipv6":
-		generator = gen(faker.IPv6)
+		generator = genF(faker.IPv6)
 	case "mac":
-		generator = gen(faker.MacAddress)
+		generator = genF(faker.MacAddress)
 	case "url":
-		generator = gen(faker.URL)
+		generator = genF(faker.URL)
 	case "useragent":
 		generator = useragentGenerator()
 	default:
-		return nil, fmt.Errorf("unsupported type: %s", typeName)
+		return nil, fmt.Errorf("unknown rule: %s", typeName)
 	}
 
 	return generator, nil
+}
+
+// for rule looks like: "oneof[one%10, two%50, three%40]" or "oneof[one%40, two%50]" or "constant[one]"
+// one%40 means 'one' generates with 40% probability
+// constant[one] means 'one' generates always
+func customGenerator(rule string) (func() string, error) {
+	var regex = `([a-zA-Z]+)\s*\[(.+)\]`
+	var pattern = regexp.MustCompile(regex)
+	if rule == "" {
+		return nil, fmt.Errorf("empty rule: %s", rule)
+	}
+	var matches = pattern.FindStringSubmatch(rule)
+	if len(matches) < 3 {
+		return nil, fmt.Errorf("invalid rule, rule must match pattern: %s", regex)
+	}
+	var typeName = matches[1]
+	var values = strings.Split(matches[2], ",")
+	var generator func() string
+	typeName = strings.ToLower(typeName)
+	switch typeName {
+	case "oneof":
+		var probs = make([]int, 0)
+		var names = make([]string, 0)
+		for _, v := range values {
+			var parts = strings.Split(v, "%")
+			if len(parts) != 2 {
+				return nil, fmt.Errorf("invalid rule, oneof rule must contain name and probability")
+			}
+			name := parts[0]
+			prob, err := strconv.Atoi(parts[1])
+			if err != nil {
+				return nil, fmt.Errorf("invalid rule, probability must be an integer")
+			}
+			names = append(names, name)
+			probs = append(probs, prob)
+		}
+		generator = func() string {
+			// generate names[i] with probability prob[i]
+			var r = rand.Intn(100)
+			var sum = 0
+			for i, prob := range probs {
+				sum += prob
+				if r < sum {
+					return names[i]
+				}
+			}
+			return names[len(names)-1]
+		}
+	case "constant":
+		if len(values) != 1 {
+			return nil, fmt.Errorf("invalid rule, constant rule must contain one value")
+		}
+		generator = func() string {
+			return values[0]
+		}
+	}
+	return generator, nil
+
 }
 
 func intGenerator(nStr, mStr string) (func() int, error) {
@@ -158,7 +223,7 @@ func intGenerator(nStr, mStr string) (func() int, error) {
 	return generator, nil
 }
 
-func gen(f func(...options.OptionFunc) string) func() string {
+func genF(f func(...options.OptionFunc) string) func() string {
 	return func() string {
 		return f()
 	}
@@ -193,8 +258,8 @@ func useragentGenerator() func() string {
 	return func() string {
 		ua, err := faker.GetUserAgent().UserAgent(reflect.Value{})
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "error generating user agent: %v\n", err)
-			return ""
+			_, _ = fmt.Fprintf(os.Stderr, "error generating user agent: %v\n", err)
+			return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36"
 		}
 		return ua.(string)
 	}
