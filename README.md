@@ -81,7 +81,7 @@ rules:
 You can generate fake data for this schema using the following command:
 
 ```bash
-db_faker generate --user postgres --password postgres --db my_database_name --rules ./rules.yaml
+db-faker generate --user postgres --password postgres --db my_database_name --rules ./rules.yaml
 ```
 
 ## Generating rules
